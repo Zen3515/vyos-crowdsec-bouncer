@@ -28,7 +28,7 @@ async fn main() -> Result<(), anyhow::Error> {
         vyos_save_config: args.vyos_save_config,
     };
     let app = App::new(lapi, vyos_api, config);
-    let metrics = Prometheus::new("127.0.0.1:3000".parse().unwrap());
+    let metrics = Prometheus::new(args.metrics_bind);
     let metrics = metrics.serve();
 
     let mut task_set = tokio::task::JoinSet::new();

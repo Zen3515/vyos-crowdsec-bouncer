@@ -4,6 +4,8 @@ Crowdsec bouncer for vyos router/firewall
 
 The bouncer will fetch decisions from local crowdsec API and adds them to a specified vyos firewall group
 
+It also exposes Prometheus metrics on `/metrics`. By default this listens on `127.0.0.1:3000`, and can be overridden with `--metrics-bind` or `METRICS_BIND`.
+
 ### [Vyos](https://vyos.io/)
 Authentication to vyos is made through apikeys
 
@@ -52,6 +54,8 @@ Options:
           [env: FIREWALL_GROUP=] [default: CROWDSEC_BOUNCER]
       --crowdsec-api <CROWDSEC_API>
           [env: CROWDSEC_API=] [default: http://localhost:8080]
+      --metrics-bind <METRICS_BIND>
+          [env: METRICS_BIND=] [default: 127.0.0.1:3000]
       --crowdsec-apikey <CROWDSEC_APIKEY>
           [env: CROWDSEC_APIKEY=]
       --crowdsec-root-ca-cert <CROWDSEC_ROOT_CA_CERT>

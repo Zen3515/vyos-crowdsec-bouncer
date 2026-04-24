@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Args, Parser};
@@ -33,6 +34,9 @@ pub struct Cli {
 
     #[arg(long, env = "CROWDSEC_API", default_value = "http://localhost:8080")]
     pub crowdsec_api: Url,
+
+    #[arg(long, env = "METRICS_BIND", default_value = "127.0.0.1:3000")]
+    pub metrics_bind: SocketAddr,
 
     #[command(flatten)]
     pub auth: Auth,
