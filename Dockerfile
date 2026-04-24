@@ -13,7 +13,6 @@ RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path r
 FROM clux/muslrust:stable AS builder
 COPY . .
 COPY --from=cacher /volume/target target
-COPY --from=cacher /root/.cargo /root/.cargo
 RUN cargo build --bin vyos-crowdsec-bouncer --release --target x86_64-unknown-linux-musl
 
 
