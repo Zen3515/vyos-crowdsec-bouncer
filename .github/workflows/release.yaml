@@ -56,6 +56,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push image
+        id: build_push_1
+        continue-on-error: true
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -66,6 +68,55 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64
+          provenance: false
+          sbom: false
+          build-args: |
+            REPOSITORY=${{ github.repository }}
+
+      - name: Wait before retry
+        if: steps.build_push_1.outcome == 'failure'
+        shell: bash
+        run: sleep 20
+
+      - name: Retry build and push image
+        id: build_push_2
+        if: steps.build_push_1.outcome == 'failure'
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          build-args: |
+            REPOSITORY=${{ github.repository }}
+
+      - name: Wait before final retry
+        if: steps.build_push_1.outcome == 'failure' && steps.build_push_2.outcome == 'failure'
+        shell: bash
+        run: sleep 40
+
+      - name: Final retry build and push image
+        id: build_push_3
+        if: steps.build_push_1.outcome == 'failure' && steps.build_push_2.outcome == 'failure'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
           build-args: |
             REPOSITORY=${{ github.repository }}
 
