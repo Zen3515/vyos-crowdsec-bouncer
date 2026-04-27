@@ -24,8 +24,8 @@ pub async fn update_firewall(
 ) -> Result<(), anyhow::Error> {
     let decision_ips = decisions_ip_range.into_nets();
     info!(
-        new = ipnets_for_log(&decision_ips.new),
-        delete = ipnets_for_log(&decision_ips.deleted),
+        new_entries = ipnets_for_log(&decision_ips.new),
+        deleted_entries = ipnets_for_log(&decision_ips.deleted),
         "Updating firewall groups",
     );
 
@@ -46,8 +46,8 @@ pub async fn update_firewall(
         }
     }
     info!(
-        added = decision_ips.new.len(),
-        deleted = decision_ips.deleted.len()
+        added_count = decision_ips.new.len(),
+        deleted_count = decision_ips.deleted.len()
     );
 
     Ok(())

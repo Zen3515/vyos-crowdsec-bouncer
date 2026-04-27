@@ -50,6 +50,7 @@ impl CrowdsecLapiClient {
         self.host.join(path).expect("invalid url")
     }
 
+    #[instrument(level = "debug", skip(self, f), fields(path))]
     async fn get<T: DeserializeOwned>(
         &self,
         path: &str,
@@ -127,8 +128,10 @@ impl CrowdsecLAPI for CrowdsecLapiClient {
         let added = resp.new.as_ref().map(Vec::len).unwrap_or_default();
         let deleted = resp.deleted.as_ref().map(Vec::len).unwrap_or_default();
         info!(
-            added,
-            deleted, decision_options.startup, "Retrieved decisions",
+            added_count = added,
+            deleted_count = deleted,
+            decision_options.startup,
+            "Retrieved decisions",
         );
 
         OUTGOING_REQUESTS_COUNTER

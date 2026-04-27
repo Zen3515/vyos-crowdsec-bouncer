@@ -3,6 +3,7 @@ use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use iprange::IpRange;
 use std::net::IpAddr;
 use std::sync::Arc;
+use tracing::{debug, instrument};
 
 use crate::metrics::FIREWALL_BLOCKED_IPS;
 
@@ -13,12 +14,18 @@ impl BlacklistCache {
     pub fn new(range: IpRangeMixed) -> Self {
         Self(ArcSwap::new(Arc::new(range)))
     }
+    #[instrument(level = "debug", skip(self, blacklist))]
     pub fn store(&self, blacklist: IpRangeMixed) {
         let mut blacklist = blacklist;
         blacklist.simplify();
 
         let ipv4 = blacklist.v4.into_iter().count() as i64;
         let ipv6 = blacklist.v6.into_iter().count() as i64;
+        debug!(
+            ipv4_entry_count = ipv4,
+            ipv6_entry_count = ipv6,
+            "Updated blacklist cache"
+        );
         FIREWALL_BLOCKED_IPS.with_label_values(&["ipv4"]).set(ipv4);
         FIREWALL_BLOCKED_IPS.with_label_values(&["ipv6"]).set(ipv6);
 

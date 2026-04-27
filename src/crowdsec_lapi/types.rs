@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use reqwest::{Certificate, Identity};
 use serde::{Deserialize, Serialize};
-use tracing::error;
+use tracing::{debug, error, instrument};
 
 use crate::blacklist::IpRangeMixed;
 use crate::cli::ClientCerts;
@@ -110,16 +110,24 @@ pub struct DecisionsResponse {
     pub deleted: Option<Vec<Decision>>,
 }
 
+#[instrument(level = "debug", skip(decisions))]
 fn parse_crowdsec_decisions(decisions: Option<Vec<Decision>>) -> Vec<IpNet> {
+    let input_count = decisions.as_ref().map(Vec::len).unwrap_or_default();
     let (to_add, errors): (Vec<_>, Vec<_>) = decisions
         .unwrap_or_default()
         .iter()
         .map(TryFrom::try_from)
         .partition(Result::is_ok);
+    let parsed_count = to_add.len();
+    let skipped_count = errors.len();
     if !errors.is_empty() {
         let errors: Vec<anyhow::Error> = errors.into_iter().map(|ip| ip.unwrap_err()).collect();
         error!(?errors, msg = "Error parsing ips from crowdsec decisions");
     }
+    debug!(
+        input_count,
+        parsed_count, skipped_count, "Parsed CrowdSec decisions into IP networks"
+    );
     to_add.into_iter().map(|ip| ip.unwrap()).collect()
 }
 

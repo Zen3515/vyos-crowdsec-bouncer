@@ -1,4 +1,4 @@
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::blacklist::IpRangeMixed;
 use crate::crowdsec_lapi::types::DecisionsIpRange;
@@ -9,6 +9,7 @@ use crate::App;
 
 const FIREWALL_GROUP_MAX_ITEMS: usize = 15_000;
 
+#[instrument(level = "debug", skip(app), fields(group_name = %app.config.firewall_group))]
 pub async fn store_existing_blacklist(app: &App) -> Result<(), anyhow::Error> {
     let existing_networks = app
         .vyos
@@ -16,10 +17,23 @@ pub async fn store_existing_blacklist(app: &App) -> Result<(), anyhow::Error> {
         .await?;
 
     let blacklist = IpRangeMixed::from(existing_networks.data);
+    debug!(
+        group_name = app.config.firewall_group.as_str(),
+        entry_count = blacklist.net_count(),
+        "Loaded firewall group state from VyOS"
+    );
     app.blacklist.store(blacklist);
     Ok(())
 }
 
+#[instrument(
+    level = "info",
+    skip(app, decision_options),
+    fields(
+        startup = decision_options.startup,
+        firewall_group = %app.config.firewall_group
+    )
+)]
 pub async fn reconcile_decisions(
     app: &App,
     decision_options: &DecisionsOptions,
@@ -42,7 +56,7 @@ pub async fn reconcile_decisions(
 
     if retained_count >= FIREWALL_GROUP_MAX_ITEMS {
         warn!(
-            retained = retained_count,
+            retained_entry_count = retained_count,
             cap = FIREWALL_GROUP_MAX_ITEMS,
             "Firewall group is at or above capacity; new CrowdSec bans will be skipped until entries are removed"
         );
@@ -55,10 +69,10 @@ pub async fn reconcile_decisions(
     if skipped_adds > 0 {
         warn!(
             cap = FIREWALL_GROUP_MAX_ITEMS,
-            retained = retained_count,
-            attempted_new = all_new_nets.len(),
-            applied_new = allowed_adds,
-            skipped_new = skipped_adds,
+            retained_entry_count = retained_count,
+            attempted_new_count = all_new_nets.len(),
+            applied_new_count = allowed_adds,
+            skipped_new_count = skipped_adds,
             "CrowdSec bans were capped to avoid exceeding the VyOS firewall group limit"
         );
     }

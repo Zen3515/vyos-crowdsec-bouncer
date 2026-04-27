@@ -30,7 +30,6 @@ impl VyosClient {
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(5))
             .danger_accept_invalid_certs(true)
-            .http1_only()
             .use_rustls_tls()
             .user_agent(USER_AGENT)
             .build()
@@ -48,6 +47,7 @@ impl VyosClient {
         self.host.join(path).expect("invalid url")
     }
 
+    #[instrument(level = "debug", skip(self, payload, timeout), fields(path))]
     async fn send<T: DeserializeOwned, P: Serialize>(
         &self,
         path: &str,
