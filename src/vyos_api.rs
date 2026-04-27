@@ -7,8 +7,8 @@ use tracing::{info, instrument};
 pub use http::VyosClient;
 pub use interface::VyosApi;
 pub use types::{
-    ipv4_group_get, ipv6_group_get, NetSet, VyosCommandResponse, VyosConfigOperation,
-    VyosSaveCommand,
+    ipv4_group_exists, ipv4_group_get, ipv6_group_exists, ipv6_group_get, NetSet,
+    VyosCommandResponse, VyosConfigOperation, VyosSaveCommand,
 };
 
 use crate::crowdsec_lapi::types::{ipnets_for_log, DecisionsIpRange};

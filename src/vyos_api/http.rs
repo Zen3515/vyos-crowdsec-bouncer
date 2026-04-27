@@ -10,7 +10,10 @@ use crate::metrics::OUTGOING_REQUESTS_COUNTER;
 use crate::USER_AGENT;
 
 use super::interface::VyosApi;
-use super::types::{ipv4_group_get, ipv6_group_get, VyosCommandResponse, VyosConfigCommand};
+use super::types::{
+    ipv4_group_exists, ipv4_group_get, ipv6_group_exists, ipv6_group_get, VyosCommandResponse,
+    VyosConfigCommand,
+};
 use super::VyosSaveCommand;
 
 #[derive(Debug)]
@@ -105,25 +108,59 @@ impl VyosApi for VyosClient {
         &self,
         group_name: &str,
     ) -> Result<VyosCommandResponse<Vec<IpNet>>, anyhow::Error> {
-        let ipv4 = self.send::<VyosCommandResponse<Vec<IpNet>>, _>(
-            "/retrieve",
-            ipv4_group_get(group_name),
-            None,
-        );
-
-        let ipv6 = self.send::<VyosCommandResponse<Vec<IpNet>>, _>(
-            "/retrieve",
-            ipv6_group_get(group_name),
-            None,
-        );
-
         OUTGOING_REQUESTS_COUNTER
             .with_label_values(&["VYOS", "/retrieve"])
             .inc_by(2);
 
-        let (ipv4, ipv6) = futures_util::join!(ipv4, ipv6);
-        let mut ips = ipv4?;
-        ips.data.append(&mut ipv6?.data);
+        let ipv4_exists = self.send::<VyosCommandResponse<bool>, _>(
+            "/retrieve",
+            ipv4_group_exists(group_name),
+            None,
+        );
+        let ipv6_exists = self.send::<VyosCommandResponse<bool>, _>(
+            "/retrieve",
+            ipv6_group_exists(group_name),
+            None,
+        );
+
+        let (ipv4_exists, ipv6_exists) = futures_util::join!(ipv4_exists, ipv6_exists);
+
+        let ipv4 = if ipv4_exists?.data {
+            OUTGOING_REQUESTS_COUNTER
+                .with_label_values(&["VYOS", "/retrieve"])
+                .inc();
+            self.send::<VyosCommandResponse<Vec<IpNet>>, _>(
+                "/retrieve",
+                ipv4_group_get(group_name),
+                None,
+            )
+            .await?
+            .data
+        } else {
+            Vec::new()
+        };
+
+        let mut ipv6 = if ipv6_exists?.data {
+            OUTGOING_REQUESTS_COUNTER
+                .with_label_values(&["VYOS", "/retrieve"])
+                .inc();
+            self.send::<VyosCommandResponse<Vec<IpNet>>, _>(
+                "/retrieve",
+                ipv6_group_get(group_name),
+                None,
+            )
+            .await?
+            .data
+        } else {
+            Vec::new()
+        };
+
+        let mut ips = VyosCommandResponse {
+            success: true,
+            data: ipv4,
+            error: None,
+        };
+        ips.data.append(&mut ipv6);
 
         Ok(ips)
     }

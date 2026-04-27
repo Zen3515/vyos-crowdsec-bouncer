@@ -24,9 +24,9 @@ pub struct VyosGetCommand<'a> {
     pub path: Vec<Cow<'a, str>>,
 }
 impl<'a> VyosGetCommand<'a> {
-    pub fn new(path: impl IntoIterator<Item = Cow<'a, str>>) -> Self {
+    pub fn new(op: VyosGetOperation, path: impl IntoIterator<Item = Cow<'a, str>>) -> Self {
         Self {
-            op: VyosGetOperation::ReturnValues,
+            op,
             path: path.into_iter().collect(),
         }
     }
@@ -55,6 +55,7 @@ pub enum VyosSaveOperation {
 #[serde(rename_all = "camelCase")]
 pub enum VyosGetOperation {
     ReturnValues,
+    Exists,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -99,13 +100,27 @@ pub fn ipv4_group_get(fw_group: &str) -> VyosGetCommand {
     let mut path = FW_GROUP_PATH_GET.clone();
     path[3] = fw_group.into();
 
-    VyosGetCommand::new(path)
+    VyosGetCommand::new(VyosGetOperation::ReturnValues, path)
 }
 pub fn ipv6_group_get(fw_group: &str) -> VyosGetCommand {
     let mut path = FW_IPV6_GROUP_PATH_GET.clone();
     path[3] = fw_group.into();
 
-    VyosGetCommand::new(path)
+    VyosGetCommand::new(VyosGetOperation::ReturnValues, path)
+}
+
+pub fn ipv4_group_exists(fw_group: &str) -> VyosGetCommand {
+    let mut path = FW_GROUP_PATH_GET.clone();
+    path[3] = fw_group.into();
+
+    VyosGetCommand::new(VyosGetOperation::Exists, path)
+}
+
+pub fn ipv6_group_exists(fw_group: &str) -> VyosGetCommand {
+    let mut path = FW_IPV6_GROUP_PATH_GET.clone();
+    path[3] = fw_group.into();
+
+    VyosGetCommand::new(VyosGetOperation::Exists, path)
 }
 
 fn ipv4_group_set(fw_group: &str, cidr: String) -> Vec<Cow<str>> {

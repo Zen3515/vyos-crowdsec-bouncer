@@ -123,7 +123,7 @@ mod tests {
 
     use super::{reconcile_decisions, App, FIREWALL_GROUP_MAX_ITEMS};
     use iprange::IpRange;
-    use mockito::{Mock, Server, ServerGuard};
+    use mockito::{Matcher, Mock, Server, ServerGuard};
 
     fn lapi_client(apikey: String, mock: &Server) -> CrowdsecLapiClient {
         let url = format!("http://{}", mock.host_with_port());
@@ -208,9 +208,18 @@ mod tests {
             .with_body(serde_json::to_vec(&initial_decisions).expect("valid json"))
             .with_status(200)
             .create();
+        let retrieve_exists = test_app
+            .vyos_mock
+            .mock("POST", "/retrieve")
+            .match_body(Matcher::Regex(r#""op":"exists""#.into()))
+            .with_body(r#"{"success": true, "data": true, "error": null}"#)
+            .with_status(200)
+            .expect(2)
+            .create();
         let retrieve = test_app
             .vyos_mock
             .mock("POST", "/retrieve")
+            .match_body(Matcher::Regex(r#""op":"returnValues""#.into()))
             .with_body(
                 serde_json::to_string(&VyosCommandResponse {
                     success: true,
@@ -238,6 +247,7 @@ mod tests {
         let result = reconcile_decisions(&test_app.app, &decision_options).await;
         assert!(result.is_ok());
         lapi_stream.assert();
+        retrieve_exists.assert();
         retrieve.assert();
         config.assert();
         save.assert();
@@ -296,9 +306,18 @@ mod tests {
             .with_body(serde_json::to_vec(&initial_decisions).expect("valid json"))
             .with_status(200)
             .create();
+        let retrieve_exists = test_app
+            .vyos_mock
+            .mock("POST", "/retrieve")
+            .match_body(Matcher::Regex(r#""op":"exists""#.into()))
+            .with_body(r#"{"success": true, "data": true, "error": null}"#)
+            .with_status(200)
+            .expect(2)
+            .create();
         let retrieve = test_app
             .vyos_mock
             .mock("POST", "/retrieve")
+            .match_body(Matcher::Regex(r#""op":"returnValues""#.into()))
             .with_body(
                 serde_json::to_string(&VyosCommandResponse {
                     success: true,
@@ -327,6 +346,7 @@ mod tests {
         let result = reconcile_decisions(&test_app.app, &decision_options).await;
         assert!(result.is_ok());
         lapi_stream.assert();
+        retrieve_exists.assert();
         retrieve.assert();
         config.assert();
     }
@@ -364,6 +384,55 @@ mod tests {
         assert!(result.is_ok());
         lapi_stream.assert();
         config.assert();
+    }
+
+    #[tokio::test]
+    async fn startup_without_existing_firewall_group_is_ok() {
+        let apikey = "test_key";
+        let mut test_app = mock_app(apikey).await;
+
+        let initial_decisions = mock_decisions([], []);
+        let lapi_stream = test_app
+            .lapi_mock
+            .mock("GET", "/v1/decisions/stream?startup=true")
+            .match_header("x-api-key", apikey)
+            .with_body(serde_json::to_vec(&initial_decisions).expect("valid json"))
+            .with_status(200)
+            .create();
+        let retrieve_exists = test_app
+            .vyos_mock
+            .mock("POST", "/retrieve")
+            .match_body(Matcher::Regex(r#""op":"exists""#.into()))
+            .with_body(r#"{"success": true, "data": false, "error": null}"#)
+            .with_status(200)
+            .expect(2)
+            .create();
+        let retrieve_values = test_app
+            .vyos_mock
+            .mock("POST", "/retrieve")
+            .match_body(Matcher::Regex(r#""op":"returnValues""#.into()))
+            .with_status(200)
+            .expect(0)
+            .create();
+        let config = test_app
+            .vyos_mock
+            .mock("POST", "/configure")
+            .with_body("{}")
+            .with_status(200)
+            .expect(0)
+            .create();
+        let decision_options = DecisionsOptions {
+            startup: true,
+            ..Default::default()
+        };
+
+        let result = reconcile_decisions(&test_app.app, &decision_options).await;
+        assert!(result.is_ok());
+        lapi_stream.assert();
+        retrieve_exists.assert();
+        retrieve_values.assert();
+        config.assert();
+        assert!(test_app.app.blacklist.load().is_empty());
     }
 
     #[tokio::test]
