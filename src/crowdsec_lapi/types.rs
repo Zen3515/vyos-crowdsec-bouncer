@@ -37,10 +37,13 @@ impl Display for Origin {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 #[allow(dead_code)]
 pub enum Scope {
     #[default]
+    #[serde(alias = "Ip", alias = "IP")]
     Ip,
+    #[serde(alias = "Range")]
     Range,
     #[serde(untagged)]
     Other(String),
@@ -87,7 +90,7 @@ impl TryFrom<&Decision> for ipnet::IpNet {
         if let Some(until) = decision.until {
             let now = chrono::Utc::now();
             if until < now {
-                return Err(anyhow!("decision skipped due to 'until' in the future"));
+                return Err(anyhow!("decision skipped because it has expired"));
             }
         }
         match decision.scope {
@@ -96,7 +99,7 @@ impl TryFrom<&Decision> for ipnet::IpNet {
                 IpAddr::V6(v6) => IpNet::V6(Ipv6Net::new(v6, 128)?),
             }),
             Scope::Range => Ok(decision.value.parse::<IpNet>()?),
-            Scope::Other(ref scope) => Err(anyhow!("Unhadled scope '{}'", scope)),
+            Scope::Other(ref scope) => Err(anyhow!("Unhandled scope '{}'", scope)),
         }
     }
 }
@@ -271,6 +274,15 @@ mod test {
         assert!(matches!(decision.scope, Scope::Other(s) if s == "other"));
         assert!(matches!(decision.origin, Origin::Other(s) if s == "something"));
         assert!(matches!(decision.type_, DecisionType::Other(s) if s == "unknown"));
+    }
+
+    #[test]
+    fn deserializes_decision_lowercase_scope() {
+        let serialized = r#"{"duration":"159h4m40.776506185s","id":22821676,"origin":"crowdsec","scenario":"crowdsecurity/test","scope":"ip","type":"ban","value":"5.10.250.79"}"#;
+
+        let decision: Decision = serde_json::from_str(serialized).expect("failed to deserialize");
+
+        assert!(matches!(decision.scope, Scope::Ip));
     }
 
     #[test]

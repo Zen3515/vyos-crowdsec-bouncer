@@ -14,10 +14,14 @@ async fn main() -> Result<(), anyhow::Error> {
     init_subscriber(subscriber);
 
     let args = Cli::parse();
+    let crowdsec_auth = args
+        .auth
+        .clone()
+        .try_into_crowdsec_auth(&args.crowdsec_api)?;
 
     let lapi = CrowdsecLapiClient::new(
         args.crowdsec_api.clone(),
-        TryFrom::try_from(args.auth.clone())?,
+        crowdsec_auth,
         std::time::Duration::from_secs(args.crowdsec_timeout),
     );
     let vyos_api = VyosClient::new(args.vyos_api.clone(), args.vyos_apikey.clone());

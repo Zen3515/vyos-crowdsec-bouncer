@@ -40,6 +40,10 @@ impl IpRangeMixed {
         self.v4.is_empty() && self.v6.is_empty()
     }
 
+    pub fn net_count(&self) -> usize {
+        self.v4.iter().count() + self.v6.iter().count()
+    }
+
     fn simplify(&mut self) {
         self.v4.simplify();
         self.v6.simplify();

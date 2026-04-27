@@ -1,4 +1,4 @@
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::blacklist::IpRangeMixed;
 use crate::crowdsec_lapi::types::DecisionsIpRange;
@@ -6,6 +6,8 @@ use crate::crowdsec_lapi::{CrowdsecLAPI, DecisionsOptions, DEFAULT_DECISION_ORIG
 use crate::utils::retry_op;
 use crate::vyos_api::{update_firewall, VyosApi};
 use crate::App;
+
+const FIREWALL_GROUP_MAX_ITEMS: usize = 15_000;
 
 pub async fn store_existing_blacklist(app: &App) -> Result<(), anyhow::Error> {
     let existing_networks = app
@@ -35,11 +37,46 @@ pub async fn reconcile_decisions(
         .filter_new(&app.config.trusted_ips)
         .filter_new(blacklist.as_ref())
         .filter_deleted(blacklist.as_ref());
+    let retained_blacklist = blacklist.as_ref().exclude(&decision_ips.deleted);
+    let retained_count = retained_blacklist.net_count();
 
-    if !decision_ips.is_empty() {
+    if retained_count >= FIREWALL_GROUP_MAX_ITEMS {
+        warn!(
+            retained = retained_count,
+            cap = FIREWALL_GROUP_MAX_ITEMS,
+            "Firewall group is at or above capacity; new CrowdSec bans will be skipped until entries are removed"
+        );
+    }
+
+    let allowed_adds = FIREWALL_GROUP_MAX_ITEMS.saturating_sub(retained_count);
+    let all_new_nets = decision_ips.new.into_nets();
+    let skipped_adds = all_new_nets.len().saturating_sub(allowed_adds);
+
+    if skipped_adds > 0 {
+        warn!(
+            cap = FIREWALL_GROUP_MAX_ITEMS,
+            retained = retained_count,
+            attempted_new = all_new_nets.len(),
+            applied_new = allowed_adds,
+            skipped_new = skipped_adds,
+            "CrowdSec bans were capped to avoid exceeding the VyOS firewall group limit"
+        );
+    }
+
+    let applied_decisions = DecisionsIpRange {
+        new: IpRangeMixed::from(
+            all_new_nets
+                .into_iter()
+                .take(allowed_adds)
+                .collect::<Vec<_>>(),
+        ),
+        deleted: decision_ips.deleted,
+    };
+
+    if !applied_decisions.is_empty() {
         if let Err(err) = update_firewall(
             &app.vyos,
-            &decision_ips,
+            &applied_decisions,
             &app.config.firewall_group,
             Some(std::time::Duration::from_secs(60 * 5)),
             app.config.vyos_save_config,
@@ -52,8 +89,8 @@ pub async fn reconcile_decisions(
                 .blacklist
                 .load()
                 .as_ref()
-                .merge(&decision_ips.new)
-                .exclude(&decision_ips.deleted);
+                .merge(&applied_decisions.new)
+                .exclude(&applied_decisions.deleted);
             app.blacklist.store(new_blacklist)
         };
     } else {
@@ -82,8 +119,9 @@ mod tests {
     use crate::crowdsec_lapi::{CrowdsecLapiClient, DecisionsOptions};
     use crate::vyos_api::{VyosClient, VyosCommandResponse};
     use crate::Config;
+    use ipnet::IpNet;
 
-    use super::{reconcile_decisions, App};
+    use super::{reconcile_decisions, App, FIREWALL_GROUP_MAX_ITEMS};
     use iprange::IpRange;
     use mockito::{Mock, Server, ServerGuard};
 
@@ -166,7 +204,7 @@ mod tests {
         let lapi_stream = test_app
             .lapi_mock
             .mock("GET", "/v1/decisions/stream?startup=true")
-            .match_header("apikey", apikey)
+            .match_header("x-api-key", apikey)
             .with_body(serde_json::to_vec(&initial_decisions).expect("valid json"))
             .with_status(200)
             .create();
@@ -217,7 +255,7 @@ mod tests {
         let lapi_stream = test_app
             .lapi_mock
             .mock("GET", "/v1/decisions/stream?startup=false")
-            .match_header("apikey", apikey)
+            .match_header("x-api-key", apikey)
             .with_body(serde_json::to_vec(&next_decisions).expect("valid json"))
             .with_status(200)
             .create();
@@ -254,7 +292,7 @@ mod tests {
         let lapi_stream = test_app
             .lapi_mock
             .mock("GET", "/v1/decisions/stream?startup=true")
-            .match_header("apikey", apikey)
+            .match_header("x-api-key", apikey)
             .with_body(serde_json::to_vec(&initial_decisions).expect("valid json"))
             .with_status(200)
             .create();
@@ -304,7 +342,7 @@ mod tests {
         let lapi_stream = test_app
             .lapi_mock
             .mock("GET", "/v1/decisions/stream?startup=false")
-            .match_header("apikey", apikey)
+            .match_header("x-api-key", apikey)
             .with_body(serde_json::to_vec(&initial_decisions).expect("valid json"))
             .with_status(200)
             .create();
@@ -326,5 +364,53 @@ mod tests {
         assert!(result.is_ok());
         lapi_stream.assert();
         config.assert();
+    }
+
+    #[tokio::test]
+    async fn caps_new_entries_at_firewall_group_limit() {
+        let apikey = "test_key";
+        let mut test_app = mock_app(apikey).await;
+
+        let existing = (0..FIREWALL_GROUP_MAX_ITEMS)
+            .map(|idx| -> IpNet {
+                format!("10.{}.{}.1/32", idx / 256, idx % 256)
+                    .parse()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        test_app.app.blacklist.store(IpRangeMixed::from(existing));
+
+        let decisions = mock_decisions(["203.0.113.1", "203.0.113.2"], []);
+        let lapi_stream = test_app
+            .lapi_mock
+            .mock("GET", "/v1/decisions/stream?startup=false")
+            .match_header("x-api-key", apikey)
+            .with_body(serde_json::to_vec(&decisions).expect("valid json"))
+            .with_status(200)
+            .create();
+
+        let config = test_app
+            .vyos_mock
+            .mock("POST", "/configure")
+            .with_body("{}")
+            .with_status(200)
+            .expect(0)
+            .create();
+        let decision_options = DecisionsOptions {
+            startup: false,
+            ..Default::default()
+        };
+
+        let result = reconcile_decisions(&test_app.app, &decision_options).await;
+        assert!(result.is_ok());
+        lapi_stream.assert();
+        config.assert();
+
+        let blacklist = test_app.app.blacklist.load();
+        assert_eq!(blacklist.net_count(), FIREWALL_GROUP_MAX_ITEMS);
+        assert!(!blacklist
+            .into_nets()
+            .iter()
+            .any(|net| net.to_string() == "203.0.113.1/32" || net.to_string() == "203.0.113.2/32"));
     }
 }

@@ -27,10 +27,8 @@ impl CrowdsecLapiClient {
         let client = match auth.clone() {
             CrowdsecAuth::Apikey(apikey) => {
                 let mut headers_map = HeaderMap::new();
-                headers_map.insert(
-                    "apikey",
-                    HeaderValue::from_str(&apikey).expect("invalid key"),
-                );
+                let apikey = HeaderValue::from_str(&apikey).expect("invalid key");
+                headers_map.insert("x-api-key", apikey);
 
                 builder.default_headers(headers_map).build()
             }
@@ -81,6 +79,7 @@ pub struct DecisionsOptions {
     #[serde(rename = "type")]
     pub type_: Option<DecisionType>,
     pub origins: Option<String>,
+    pub scopes: Option<String>,
     pub dedup: Option<bool>,
 }
 
@@ -95,6 +94,7 @@ impl DecisionsOptions {
             startup,
             type_: Some(DecisionType::Ban),
             origins: Some(origins),
+            scopes: Some(String::from("ip,range")),
             // TODO: set this back to true
             // without this central decisions shadow local ones
             // and until vyos fixes the bug to allow more than
@@ -139,5 +139,30 @@ impl CrowdsecLAPI for CrowdsecLapiClient {
             .inc();
 
         Ok(resp)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{DecisionsOptions, DEFAULT_DECISION_ORIGINS};
+
+    #[test]
+    fn decisions_options_default_to_ip_and_range_scopes() {
+        let options = DecisionsOptions::new(&DEFAULT_DECISION_ORIGINS, true);
+
+        let actual = serde_json::to_value(options).expect("valid json");
+
+        assert_eq!(
+            actual,
+            json!({
+                "startup": true,
+                "type": "ban",
+                "origins": "crowdsec,lists,cscli",
+                "scopes": "ip,range",
+                "dedup": false
+            })
+        );
     }
 }

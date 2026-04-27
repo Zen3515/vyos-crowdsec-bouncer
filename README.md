@@ -28,10 +28,14 @@ rule 4 {
 
 ### [Crowdsec](https://docs.crowdsec.net/docs/intro/)
 Authentication to crowdsec supports both apikey and MTLS
+When using MTLS, `CROWDSEC_API` must be an `https://` URL.
 #### Limitations
 Due to a [bug/limitation](https://vyos.dev/T6625) in VYOS, no more than 15k items can exist in a firewall group.
 As a result we limit the origins of the decisions from crowdsec to `Origin::Crowdsec, Origin::Lists, Origin::Cscli`\
 This strikes a balance between having a base of blocked ips coming from custom lists and blocking bad actors from local decisions
+
+The bouncer also only requests IP and CIDR decisions from CrowdSec, which matches what VyOS network groups can enforce.
+If the firewall group reaches 15k entries, additional bans are skipped and a warning is logged until capacity is freed by deletions.
 
 Once this problem is fixed we can enable the crowdsourced blocklist coming from the central api (CAPI) and allow for customizing the origins.
 

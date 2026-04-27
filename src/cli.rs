@@ -102,16 +102,105 @@ impl TryFrom<CertAuth> for ClientCerts {
     }
 }
 
-impl TryFrom<Auth> for CrowdsecAuth {
-    type Error = anyhow::Error;
-    fn try_from(value: Auth) -> Result<Self, Self::Error> {
-        if let Some(apikey) = value.crowdsec_apikey {
-            Ok(Self::Apikey(apikey))
-        } else if value.cert_auth.exists() {
-            let certs = ClientCerts::try_from(value.cert_auth)?;
-            Ok(Self::Certs(TryFrom::try_from(certs)?))
+impl Auth {
+    pub fn try_into_crowdsec_auth(self, crowdsec_api: &Url) -> Result<CrowdsecAuth, anyhow::Error> {
+        if let Some(apikey) = self.crowdsec_apikey {
+            Ok(CrowdsecAuth::Apikey(apikey))
+        } else if self.cert_auth.exists() {
+            if crowdsec_api.scheme() != "https" {
+                return Err(anyhow::anyhow!(
+                    "CrowdSec certificate authentication requires an https:// CROWDSEC_API, got {}",
+                    crowdsec_api
+                ));
+            }
+            let certs = ClientCerts::try_from(self.cert_auth)?;
+            Ok(CrowdsecAuth::Certs(TryFrom::try_from(certs)?))
         } else {
-            Err(anyhow::anyhow!("No authentication provided for vyos!"))
+            Err(anyhow::anyhow!("No authentication provided for CrowdSec!"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use reqwest::Url;
+
+    use super::{Auth, CertAuth};
+    use crate::crowdsec_lapi::types::CrowdsecAuth;
+
+    struct TempCertFiles {
+        dir: PathBuf,
+        cert_auth: CertAuth,
+    }
+
+    impl TempCertFiles {
+        fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "vyos-crowdsec-bouncer-cli-test-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("valid time")
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&dir).expect("create temp dir");
+
+            let ca = dir.join("ca.crt");
+            let cert = dir.join("tls.crt");
+            let key = dir.join("tls.key");
+
+            fs::write(&ca, "placeholder").expect("write ca");
+            fs::write(&cert, "placeholder").expect("write cert");
+            fs::write(&key, "placeholder").expect("write key");
+
+            Self {
+                dir,
+                cert_auth: CertAuth {
+                    crowdsec_root_ca_cert: ca,
+                    crowdsec_client_cert: cert,
+                    crowdsec_client_key: key,
+                },
+            }
+        }
+    }
+
+    impl Drop for TempCertFiles {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn uses_apikey_auth_when_provided() {
+        let certs = TempCertFiles::new();
+        let auth = Auth {
+            crowdsec_apikey: Some(String::from("secret")),
+            cert_auth: certs.cert_auth.clone(),
+        };
+
+        let crowdsec_auth = auth
+            .try_into_crowdsec_auth(&Url::parse("http://localhost:8080").unwrap())
+            .expect("apikey auth should work");
+
+        assert!(matches!(crowdsec_auth, CrowdsecAuth::Apikey(apikey) if apikey == "secret"));
+    }
+
+    #[test]
+    fn rejects_certificate_auth_over_http() {
+        let certs = TempCertFiles::new();
+        let auth = Auth {
+            crowdsec_apikey: None,
+            cert_auth: certs.cert_auth.clone(),
+        };
+
+        let error = auth
+            .try_into_crowdsec_auth(&Url::parse("http://localhost:8080").unwrap())
+            .expect_err("http should reject certificate auth");
+
+        assert!(error.to_string().contains("https:// CROWDSEC_API"));
     }
 }
