@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use ipnet::IpNet;
+use reqwest::header::ALLOW;
 use reqwest::multipart::Form;
 use reqwest::{Client, StatusCode, Url};
 use serde::{de::DeserializeOwned, Serialize};
@@ -29,6 +30,7 @@ impl VyosClient {
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(5))
             .danger_accept_invalid_certs(true)
+            .http1_only()
             .use_rustls_tls()
             .user_agent(USER_AGENT)
             .build()
@@ -70,10 +72,35 @@ impl VyosClient {
         match resp.error_for_status_ref() {
             Ok(_) => Ok(resp.json().await?),
             Err(err) => {
+                let status = resp.status();
+                let allow = resp
+                    .headers()
+                    .get(ALLOW)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_owned);
+                let body = resp.text().await.unwrap_or_default();
+
                 if err.status() == Some(StatusCode::BAD_REQUEST) {
-                    Err(anyhow::anyhow!(resp.json::<serde_json::Value>().await?))
+                    let detail = serde_json::from_str::<serde_json::Value>(&body)
+                        .map(|value| value.to_string())
+                        .unwrap_or(body);
+                    Err(anyhow::anyhow!(detail))
                 } else {
-                    Err(anyhow::Error::from(err))
+                    let allow = allow
+                        .map(|value| format!(", allow={value}"))
+                        .unwrap_or_default();
+                    let body = if body.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", body={body}")
+                    };
+                    Err(anyhow::anyhow!(
+                        "VyOS API request to {} failed with status {}{}{}",
+                        path,
+                        status,
+                        allow,
+                        body
+                    ))
                 }
             }
         }
@@ -112,20 +139,11 @@ impl VyosApi for VyosClient {
             .with_label_values(&["VYOS", "/retrieve"])
             .inc_by(2);
 
-        let ipv4_exists = self.send::<VyosCommandResponse<bool>, _>(
-            "/retrieve",
-            ipv4_group_exists(group_name),
-            None,
-        );
-        let ipv6_exists = self.send::<VyosCommandResponse<bool>, _>(
-            "/retrieve",
-            ipv6_group_exists(group_name),
-            None,
-        );
+        let ipv4_exists = self
+            .send::<VyosCommandResponse<bool>, _>("/retrieve", ipv4_group_exists(group_name), None)
+            .await?;
 
-        let (ipv4_exists, ipv6_exists) = futures_util::join!(ipv4_exists, ipv6_exists);
-
-        let ipv4 = if ipv4_exists?.data {
+        let ipv4 = if ipv4_exists.data {
             OUTGOING_REQUESTS_COUNTER
                 .with_label_values(&["VYOS", "/retrieve"])
                 .inc();
@@ -140,7 +158,11 @@ impl VyosApi for VyosClient {
             Vec::new()
         };
 
-        let mut ipv6 = if ipv6_exists?.data {
+        let ipv6_exists = self
+            .send::<VyosCommandResponse<bool>, _>("/retrieve", ipv6_group_exists(group_name), None)
+            .await?;
+
+        let mut ipv6 = if ipv6_exists.data {
             OUTGOING_REQUESTS_COUNTER
                 .with_label_values(&["VYOS", "/retrieve"])
                 .inc();
