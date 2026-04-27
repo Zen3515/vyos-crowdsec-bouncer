@@ -9,7 +9,7 @@ use crate::crowdsec_lapi::types::CrowdsecAuth;
 use crate::utils::read_file;
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(version = crate::VERSION, about, long_about = None)]
 pub struct Cli {
     #[arg(long, env, num_args = 1..)]
     pub trusted_ips: Option<Vec<IpNet>>,

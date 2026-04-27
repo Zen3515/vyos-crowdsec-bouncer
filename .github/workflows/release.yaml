@@ -39,6 +39,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Write build version override
+        shell: bash
+        run: |
+          mkdir -p build
+          printf '%s\n' "${{ steps.version.outputs.tag }}" > build/version.txt
+
       - name: Extract Docker metadata
         uses: docker/metadata-action@v5
         id: meta

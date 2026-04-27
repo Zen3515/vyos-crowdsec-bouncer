@@ -14,7 +14,9 @@ use vyos_api::VyosClient;
 
 use self::blacklist::IpRangeMixed;
 
-pub(crate) const USER_AGENT: &str = "vyos-crowdsec-bouncer/v0.0.1";
+pub const VERSION: &str = env!("APP_VERSION");
+
+pub(crate) const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("APP_VERSION"));
 
 pub struct App {
     lapi: CrowdsecLapiClient,

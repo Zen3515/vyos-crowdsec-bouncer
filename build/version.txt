@@ -1,0 +1,3 @@
+# Optional build-time version override.
+# Release automation can replace this file with a single version string, for example:
+# v2026.04.1
