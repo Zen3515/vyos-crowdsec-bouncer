@@ -17,6 +17,10 @@ pub struct Cli {
     #[arg(long, env = "UPDATE_FREQUENCY_SECS", default_value = "60")]
     pub update_period_secs: u64,
 
+    /// Periodically reconcile the whole VyOS group against CrowdSec active decisions. Set to 0 to disable.
+    #[arg(long, env = "FULL_SYNC_INTERVAL_SECS", default_value = "900")]
+    pub full_sync_interval_secs: u64,
+
     #[arg(long, env = "VYOS_APIKEY")]
     pub vyos_apikey: String,
 

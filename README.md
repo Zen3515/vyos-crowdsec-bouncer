@@ -4,6 +4,10 @@ Crowdsec bouncer for vyos router/firewall
 
 The bouncer will fetch decisions from local crowdsec API and adds them to a specified vyos firewall group
 
+The configured firewall group is treated as managed by this bouncer. Startup and periodic full syncs
+reconcile the VyOS group against the active CrowdSec decisions, so stale entries that no longer exist
+in CrowdSec are removed from that group.
+
 It also exposes Prometheus metrics on `/metrics`. By default this listens on `127.0.0.1:3000`, and can be overridden with `--metrics-bind` or `METRICS_BIND`.
 
 ### [Vyos](https://vyos.io/)
@@ -37,6 +41,11 @@ This strikes a balance between having a base of blocked ips coming from custom l
 The bouncer also only requests IP and CIDR decisions from CrowdSec, which matches what VyOS network groups can enforce.
 If the firewall group reaches 15k entries, additional bans are skipped and a warning is logged until capacity is freed by deletions.
 
+The bouncer uses incremental CrowdSec streams between full syncs. A full sync runs at startup, after any
+failed or ambiguous VyOS write/save attempt, and periodically every `FULL_SYNC_INTERVAL_SECS`
+(default: 900 seconds, set to `0` to disable periodic full sync). Full sync reads the existing VyOS
+group, fetches active CrowdSec decisions with `startup=true`, then applies the computed add/delete diff.
+
 Once this problem is fixed we can enable the crowdsourced blocklist coming from the central api (CAPI) and allow for customizing the origins.
 
 ### CLI
@@ -48,6 +57,8 @@ Options:
           [env: TRUSTED_IPS=]
       --update-period-secs <UPDATE_PERIOD_SECS>
           [env: UPDATE_FREQUENCY_SECS=] [default: 60]
+      --full-sync-interval-secs <FULL_SYNC_INTERVAL_SECS>
+          [env: FULL_SYNC_INTERVAL_SECS=] [default: 900]
       --vyos-apikey <VYOS_APIKEY>
           [env: VYOS_APIKEY=]
       --vyos-api <VYOS_API>

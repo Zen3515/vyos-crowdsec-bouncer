@@ -29,6 +29,11 @@ async fn main() -> Result<(), anyhow::Error> {
         firewall_group: args.firewall_group,
         trusted_ips: args.trusted_ips.map(From::from).unwrap_or_default(),
         update_period: std::time::Duration::from_secs(args.update_period_secs),
+        full_sync_interval: if args.full_sync_interval_secs == 0 {
+            None
+        } else {
+            Some(std::time::Duration::from_secs(args.full_sync_interval_secs))
+        },
         vyos_save_config: args.vyos_save_config,
     };
     let app = App::new(lapi, vyos_api, config);

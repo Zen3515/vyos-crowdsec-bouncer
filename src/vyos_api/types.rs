@@ -65,6 +65,23 @@ pub struct VyosCommandResponse<T> {
     pub error: Option<String>,
 }
 
+impl<T> VyosCommandResponse<T> {
+    pub fn into_data(self, path: &str) -> Result<T, anyhow::Error> {
+        if self.success {
+            Ok(self.data)
+        } else {
+            let error = self
+                .error
+                .unwrap_or_else(|| String::from("missing error detail"));
+            Err(anyhow::anyhow!(
+                "VyOS API request to {} returned success=false: {}",
+                path,
+                error
+            ))
+        }
+    }
+}
+
 impl<'a> VyosConfigCommand<'a> {
     pub(super) fn new(op: VyosConfigOperation, path: Vec<Cow<'a, str>>) -> Self {
         Self { op, path }
@@ -96,40 +113,40 @@ static FW_IPV6_GROUP_PATH_SET: LazyLock<Vec<Cow<str>>> = LazyLock::new(|| {
         .collect()
 });
 
-pub fn ipv4_group_get(fw_group: &str) -> VyosGetCommand {
+pub fn ipv4_group_get(fw_group: &str) -> VyosGetCommand<'_> {
     let mut path = FW_GROUP_PATH_GET.clone();
     path[3] = fw_group.into();
 
     VyosGetCommand::new(VyosGetOperation::ReturnValues, path)
 }
-pub fn ipv6_group_get(fw_group: &str) -> VyosGetCommand {
+pub fn ipv6_group_get(fw_group: &str) -> VyosGetCommand<'_> {
     let mut path = FW_IPV6_GROUP_PATH_GET.clone();
     path[3] = fw_group.into();
 
     VyosGetCommand::new(VyosGetOperation::ReturnValues, path)
 }
 
-pub fn ipv4_group_exists(fw_group: &str) -> VyosGetCommand {
+pub fn ipv4_group_exists(fw_group: &str) -> VyosGetCommand<'_> {
     let mut path = FW_GROUP_PATH_GET.clone();
     path[3] = fw_group.into();
 
     VyosGetCommand::new(VyosGetOperation::Exists, path)
 }
 
-pub fn ipv6_group_exists(fw_group: &str) -> VyosGetCommand {
+pub fn ipv6_group_exists(fw_group: &str) -> VyosGetCommand<'_> {
     let mut path = FW_IPV6_GROUP_PATH_GET.clone();
     path[3] = fw_group.into();
 
     VyosGetCommand::new(VyosGetOperation::Exists, path)
 }
 
-fn ipv4_group_set(fw_group: &str, cidr: String) -> Vec<Cow<str>> {
+fn ipv4_group_set(fw_group: &str, cidr: String) -> Vec<Cow<'_, str>> {
     let mut path = (*FW_GROUP_PATH_SET).clone();
     path[3] = fw_group.into();
     path[5] = cidr.into();
     path
 }
-fn ipv6_group_set(fw_group: &str, cidr: String) -> Vec<Cow<str>> {
+fn ipv6_group_set(fw_group: &str, cidr: String) -> Vec<Cow<'_, str>> {
     let mut path = (*FW_IPV6_GROUP_PATH_SET).clone();
     path[3] = fw_group.into();
     path[5] = cidr.into();
@@ -143,7 +160,7 @@ impl NetSet<'_> {
         self,
         op: VyosConfigOperation,
         firewall_group: &str,
-    ) -> Vec<VyosConfigCommand> {
+    ) -> Vec<VyosConfigCommand<'_>> {
         self.0
             .iter()
             .map(|net| match net {

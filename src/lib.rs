@@ -8,6 +8,8 @@ pub mod tracing_setup;
 pub mod utils;
 pub mod vyos_api;
 
+use std::sync::atomic::AtomicBool;
+
 use blacklist::BlacklistCache;
 use crowdsec_lapi::CrowdsecLapiClient;
 use vyos_api::VyosClient;
@@ -22,6 +24,7 @@ pub struct App {
     lapi: CrowdsecLapiClient,
     vyos: VyosClient,
     blacklist: BlacklistCache,
+    pending_save: AtomicBool,
     config: Config,
 }
 
@@ -29,6 +32,7 @@ pub struct Config {
     pub firewall_group: String,
     pub trusted_ips: IpRangeMixed,
     pub update_period: std::time::Duration,
+    pub full_sync_interval: Option<std::time::Duration>,
     pub vyos_save_config: bool,
 }
 
@@ -38,6 +42,7 @@ impl App {
             lapi: crowdsec_api,
             vyos: vyos_api,
             blacklist: BlacklistCache::default(),
+            pending_save: AtomicBool::new(false),
             config,
         }
     }

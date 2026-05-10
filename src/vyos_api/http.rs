@@ -114,8 +114,9 @@ impl VyosApi for VyosClient {
         commands: &[VyosConfigCommand<'a>],
         timeout: Option<Duration>,
     ) -> Result<(), anyhow::Error> {
-        self.send::<serde_json::Value, _>("/configure", commands, timeout)
-            .await?;
+        self.send::<VyosCommandResponse<serde_json::Value>, _>("/configure", commands, timeout)
+            .await?
+            .into_data("/configure")?;
         OUTGOING_REQUESTS_COUNTER
             .with_label_values(&["VYOS", "/configure"])
             .inc();
@@ -123,8 +124,13 @@ impl VyosApi for VyosClient {
     }
     #[instrument(skip(self, timeout))]
     async fn save_config(&self, timeout: Option<Duration>) -> Result<(), anyhow::Error> {
-        self.send::<serde_json::Value, _>("/config-file", VyosSaveCommand::default(), timeout)
-            .await?;
+        self.send::<VyosCommandResponse<serde_json::Value>, _>(
+            "/config-file",
+            VyosSaveCommand::default(),
+            timeout,
+        )
+        .await?
+        .into_data("/config-file")?;
         OUTGOING_REQUESTS_COUNTER
             .with_label_values(&["VYOS", "/config-file"])
             .inc();
@@ -141,9 +147,10 @@ impl VyosApi for VyosClient {
 
         let ipv4_exists = self
             .send::<VyosCommandResponse<bool>, _>("/retrieve", ipv4_group_exists(group_name), None)
-            .await?;
+            .await?
+            .into_data("/retrieve")?;
 
-        let ipv4 = if ipv4_exists.data {
+        let ipv4 = if ipv4_exists {
             OUTGOING_REQUESTS_COUNTER
                 .with_label_values(&["VYOS", "/retrieve"])
                 .inc();
@@ -153,16 +160,17 @@ impl VyosApi for VyosClient {
                 None,
             )
             .await?
-            .data
+            .into_data("/retrieve")?
         } else {
             Vec::new()
         };
 
         let ipv6_exists = self
             .send::<VyosCommandResponse<bool>, _>("/retrieve", ipv6_group_exists(group_name), None)
-            .await?;
+            .await?
+            .into_data("/retrieve")?;
 
-        let mut ipv6 = if ipv6_exists.data {
+        let mut ipv6 = if ipv6_exists {
             OUTGOING_REQUESTS_COUNTER
                 .with_label_values(&["VYOS", "/retrieve"])
                 .inc();
@@ -172,7 +180,7 @@ impl VyosApi for VyosClient {
                 None,
             )
             .await?
-            .data
+            .into_data("/retrieve")?
         } else {
             Vec::new()
         };
