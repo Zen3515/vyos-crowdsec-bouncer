@@ -11,7 +11,7 @@ pub use types::{
     VyosCommandResponse, VyosConfigOperation, VyosSaveCommand,
 };
 
-use crate::crowdsec_lapi::types::{ipnets_for_log, DecisionsIpRange};
+use crate::crowdsec_lapi::types::{ipnets_for_log, DecisionsIpRange, DecisionsNets};
 use crate::metrics::VYOS_COMMANDS_SENT_COUNTER;
 
 #[instrument(skip(vyos_api, decisions_ip_range))]
@@ -22,7 +22,24 @@ pub async fn update_firewall(
     timeout: Option<std::time::Duration>,
     save_changes: bool,
 ) -> Result<(), anyhow::Error> {
-    let decision_ips = decisions_ip_range.into_nets();
+    update_firewall_nets(
+        vyos_api,
+        decisions_ip_range.into_nets(),
+        firewall_group,
+        timeout,
+        save_changes,
+    )
+    .await
+}
+
+#[instrument(skip(vyos_api, decision_ips))]
+pub async fn update_firewall_nets(
+    vyos_api: &VyosClient,
+    decision_ips: DecisionsNets,
+    firewall_group: &str,
+    timeout: Option<std::time::Duration>,
+    save_changes: bool,
+) -> Result<(), anyhow::Error> {
     info!(
         new_entries = ipnets_for_log(&decision_ips.new),
         deleted_entries = ipnets_for_log(&decision_ips.deleted),

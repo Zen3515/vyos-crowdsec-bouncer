@@ -1,13 +1,15 @@
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use ipnet::IpNet;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::blacklist::IpRangeMixed;
-use crate::crowdsec_lapi::types::DecisionsIpRange;
+use crate::crowdsec_lapi::types::{DecisionsIpRange, DecisionsNets};
 use crate::crowdsec_lapi::{CrowdsecLAPI, DecisionsOptions, DEFAULT_DECISION_ORIGINS};
 use crate::utils::retry_backoff;
-use crate::vyos_api::{update_firewall, VyosApi};
+use crate::vyos_api::{update_firewall_nets, VyosApi};
 use crate::App;
 
 const FIREWALL_GROUP_MAX_ITEMS: usize = 15_000;
@@ -31,24 +33,28 @@ impl ReconcileMode {
 
 #[derive(Debug)]
 struct CappedUpdate {
-    decisions: DecisionsIpRange,
+    decisions: DecisionsNets,
     final_blacklist: IpRangeMixed,
 }
 
 #[instrument(level = "debug", skip(app), fields(group_name = %app.config.firewall_group))]
-async fn retrieve_existing_blacklist(app: &App) -> Result<IpRangeMixed, anyhow::Error> {
+async fn retrieve_existing_networks(app: &App) -> Result<Vec<IpNet>, anyhow::Error> {
     let existing_networks = app
         .vyos
         .retrieve_firewall_network_groups(&app.config.firewall_group)
         .await?;
 
-    let blacklist = IpRangeMixed::from(existing_networks.data);
+    let entry_count = existing_networks.data.len();
     debug!(
         group_name = app.config.firewall_group.as_str(),
-        entry_count = blacklist.net_count(),
-        "Loaded firewall group state from VyOS"
+        entry_count, "Loaded firewall group state from VyOS"
     );
-    Ok(blacklist)
+    Ok(existing_networks.data)
+}
+
+#[instrument(level = "debug", skip(app), fields(group_name = %app.config.firewall_group))]
+async fn retrieve_existing_blacklist(app: &App) -> Result<IpRangeMixed, anyhow::Error> {
+    Ok(IpRangeMixed::from(retrieve_existing_networks(app).await?))
 }
 
 #[instrument(level = "debug", skip(app), fields(group_name = %app.config.firewall_group))]
@@ -99,11 +105,53 @@ fn build_capped_update(
     let final_blacklist = retained_blacklist.merge(&applied_new);
 
     CappedUpdate {
-        decisions: DecisionsIpRange {
-            new: applied_new,
-            deleted,
+        decisions: DecisionsNets {
+            new: applied_new.into_nets(),
+            deleted: deleted.into_nets(),
         },
         final_blacklist,
+    }
+}
+
+fn build_exact_full_sync_update(
+    actual_nets: Vec<IpNet>,
+    desired_blacklist: IpRangeMixed,
+) -> CappedUpdate {
+    let all_desired_nets = desired_blacklist.into_nets();
+    let attempted_desired_count = all_desired_nets.len();
+    let applied_desired_count = attempted_desired_count.min(FIREWALL_GROUP_MAX_ITEMS);
+    let skipped_desired_count = attempted_desired_count.saturating_sub(applied_desired_count);
+
+    if skipped_desired_count > 0 {
+        warn!(
+            cap = FIREWALL_GROUP_MAX_ITEMS,
+            attempted_desired_count,
+            applied_desired_count,
+            skipped_desired_count,
+            "CrowdSec bans were capped during full sync to avoid exceeding the VyOS firewall group limit"
+        );
+    }
+
+    let desired_nets = all_desired_nets
+        .into_iter()
+        .take(applied_desired_count)
+        .collect::<Vec<_>>();
+    let actual_set = actual_nets.iter().cloned().collect::<HashSet<_>>();
+    let desired_set = desired_nets.iter().cloned().collect::<HashSet<_>>();
+
+    let deleted = actual_nets
+        .into_iter()
+        .filter(|net| !desired_set.contains(net))
+        .collect::<Vec<_>>();
+    let new = desired_nets
+        .iter()
+        .filter(|net| !actual_set.contains(*net))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    CappedUpdate {
+        decisions: DecisionsNets { new, deleted },
+        final_blacklist: IpRangeMixed::from(desired_nets),
     }
 }
 
@@ -125,9 +173,9 @@ async fn apply_update(
             app.pending_save.store(false, Ordering::SeqCst);
         }
     } else {
-        if let Err(err) = update_firewall(
+        if let Err(err) = update_firewall_nets(
             &app.vyos,
-            &update.decisions,
+            update.decisions.clone(),
             &app.config.firewall_group,
             timeout,
             app.config.vyos_save_config,
@@ -192,16 +240,13 @@ async fn reconcile_full_sync(
 ) -> Result<(), anyhow::Error> {
     info!("Reconciling full firewall group state");
 
-    let actual_blacklist = retrieve_existing_blacklist(app).await?;
+    let actual_nets = retrieve_existing_networks(app).await?;
     let desired_decisions = app.lapi.stream_decisions(decision_options).await?;
     let desired_blacklist = DecisionsIpRange::from(desired_decisions)
         .new
         .exclude(&app.config.trusted_ips);
 
-    let deleted = actual_blacklist.exclude(&desired_blacklist);
-    let retained_blacklist = actual_blacklist.exclude(&deleted);
-    let candidate_adds = desired_blacklist.exclude(&actual_blacklist);
-    let update = build_capped_update(&retained_blacklist, candidate_adds, deleted);
+    let update = build_exact_full_sync_update(actual_nets, desired_blacklist);
 
     apply_update(app, update, ReconcileMode::FullSync).await
 }
@@ -838,6 +883,62 @@ mod tests {
         assert_eq!(
             test_app.app.blacklist.load().v4,
             IpRange::from_iter(["127.0.0.2/32"].into_iter().map(|x| x.parse().unwrap()))
+        );
+    }
+
+    #[tokio::test]
+    async fn full_sync_deletes_exact_stale_vyos_entries_without_simplifying_them() {
+        let apikey = "test_key";
+        let mut test_app = mock_app(apikey).await;
+
+        let retrieve_mocks = mock_retrieve_group(
+            &mut test_app.vyos_mock,
+            &["87.121.84.80/31", "87.121.84.82/31", "107.172.35.195/32"],
+            &[],
+        );
+
+        let decisions = mock_decisions(["107.172.35.195"], []);
+        let lapi_stream = test_app
+            .lapi_mock
+            .mock("GET", "/v1/decisions/stream?startup=true")
+            .match_header("x-api-key", apikey)
+            .with_body(serde_json::to_vec(&decisions).expect("valid json"))
+            .with_status(200)
+            .create();
+
+        let config = test_app
+            .vyos_mock
+            .mock("POST", "/configure")
+            .match_body(Matcher::AllOf(vec![
+                Matcher::Regex(r#"87\.121\.84\.80/31"#.into()),
+                Matcher::Regex(r#"87\.121\.84\.82/31"#.into()),
+            ]))
+            .with_body(r#"{"success": true, "data": [], "error": null}"#)
+            .with_status(200)
+            .expect(1)
+            .create();
+        let save = mock_save_command(&mut test_app.vyos_mock);
+
+        let decision_options = DecisionsOptions {
+            startup: true,
+            ..Default::default()
+        };
+
+        let result = reconcile_decisions(&test_app.app, &decision_options).await;
+        assert!(result.is_ok());
+        for mock in retrieve_mocks {
+            mock.assert();
+        }
+        lapi_stream.assert();
+        config.assert();
+        save.assert();
+        assert_eq!(
+            test_app.app.blacklist.load().v4,
+            IpRange::from_iter(
+                ["107.172.35.195/32"]
+                    .into_iter()
+                    .map(|x| x.parse().unwrap())
+            )
         );
     }
 

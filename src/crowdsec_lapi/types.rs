@@ -175,10 +175,16 @@ impl DecisionsIpRange {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DecisionsNets {
     pub new: Vec<IpNet>,
     pub deleted: Vec<IpNet>,
+}
+
+impl DecisionsNets {
+    pub fn is_empty(&self) -> bool {
+        self.new.is_empty() && self.deleted.is_empty()
+    }
 }
 
 pub fn ipnets_for_log<'a>(value: impl IntoIterator<Item = &'a IpNet>) -> String {
