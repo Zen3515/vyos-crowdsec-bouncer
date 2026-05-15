@@ -80,7 +80,15 @@ fn build_capped_update(
     }
 
     let allowed_adds = FIREWALL_GROUP_MAX_ITEMS.saturating_sub(retained_count);
-    let all_new_nets = candidate_adds.into_nets();
+    let retained_nets = retained_blacklist
+        .into_nets()
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let all_new_nets = candidate_adds
+        .into_nets()
+        .into_iter()
+        .filter(|net| !retained_nets.contains(net))
+        .collect::<Vec<_>>();
     let attempted_new_count = all_new_nets.len();
     let applied_new_count = attempted_new_count.min(allowed_adds);
     let skipped_adds = attempted_new_count.saturating_sub(applied_new_count);
@@ -226,7 +234,6 @@ async fn reconcile_incremental(
     let blacklist = app.blacklist.load();
     let decision_ips = DecisionsIpRange::from(new_decisions)
         .filter_new(&app.config.trusted_ips)
-        .filter_new(blacklist.as_ref())
         .filter_deleted(blacklist.as_ref());
     let retained_blacklist = blacklist.as_ref().exclude(&decision_ips.deleted);
 
@@ -351,8 +358,8 @@ mod tests {
     use ipnet::IpNet;
 
     use super::{
-        reconcile_decisions, reconcile_with_retries, select_reconcile_mode, App, ReconcileMode,
-        FIREWALL_GROUP_MAX_ITEMS,
+        build_capped_update, reconcile_decisions, reconcile_with_retries, select_reconcile_mode,
+        App, ReconcileMode, FIREWALL_GROUP_MAX_ITEMS,
     };
     use iprange::IpRange;
     use mockito::{Matcher, Mock, Server, ServerGuard};
@@ -736,6 +743,22 @@ mod tests {
         assert!(result.is_ok());
         lapi_stream.assert();
         config.assert();
+    }
+
+    #[test]
+    fn incremental_update_keeps_overlapping_range_decision_intact() {
+        let retained =
+            IpRangeMixed::from(ipnets(&["213.209.159.11/32", "213.209.159.228/32"]));
+        let candidate_adds = IpRangeMixed::from(ipnets(&["213.209.159.0/24"]));
+
+        let update = build_capped_update(&retained, candidate_adds, IpRangeMixed::default());
+
+        assert_eq!(update.decisions.new, ipnets(&["213.209.159.0/24"]));
+        assert!(update.decisions.deleted.is_empty());
+        assert_eq!(
+            update.final_blacklist.v4,
+            IpRange::from_iter(["213.209.159.0/24"].into_iter().map(|x| x.parse().unwrap()))
+        );
     }
 
     #[tokio::test]
