@@ -4,6 +4,7 @@ pub mod control_loop;
 pub mod crowdsec_lapi;
 pub mod metrics;
 pub mod prometheus;
+pub mod remote_group;
 pub mod tracing_setup;
 pub mod utils;
 pub mod vyos_api;

@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use clap::{Args, Parser};
+use clap::{Args, Parser, ValueEnum};
 use ipnet::IpNet;
 use reqwest::Url;
 
@@ -11,6 +11,9 @@ use crate::utils::read_file;
 #[derive(Parser, Debug)]
 #[command(version = crate::VERSION, about, long_about = None)]
 pub struct Cli {
+    #[arg(long, env = "BOUNCER_MODE", value_enum, default_value_t = BouncerMode::VyosApi)]
+    pub mode: BouncerMode,
+
     #[arg(long, env, num_args = 1..)]
     pub trusted_ips: Option<Vec<IpNet>>,
 
@@ -22,10 +25,10 @@ pub struct Cli {
     pub full_sync_interval_secs: u64,
 
     #[arg(long, env = "VYOS_APIKEY")]
-    pub vyos_apikey: String,
+    pub vyos_apikey: Option<String>,
 
     #[arg(long, env = "VYOS_API")]
-    pub vyos_api: Url,
+    pub vyos_api: Option<Url>,
 
     #[arg(long, env = "CROWDSEC_TIMEOUT", default_value = "10")]
     pub crowdsec_timeout: u64,
@@ -42,8 +45,47 @@ pub struct Cli {
     #[arg(long, env = "METRICS_BIND", default_value = "127.0.0.1:3000")]
     pub metrics_bind: SocketAddr,
 
+    #[arg(long, env = "REMOTE_GROUP_BIND", default_value = "0.0.0.0:8080")]
+    pub remote_group_bind: SocketAddr,
+
+    #[arg(long, env = "REMOTE_GROUP_PATH", default_value = "/crowdsec")]
+    pub remote_group_path: String,
+
     #[command(flatten)]
     pub auth: Auth,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum BouncerMode {
+    VyosApi,
+    RemoteGroup,
+}
+
+impl Cli {
+    pub fn validate(&self) -> Result<(), anyhow::Error> {
+        if matches!(self.mode, BouncerMode::VyosApi) {
+            if self.vyos_apikey.is_none() {
+                return Err(anyhow::anyhow!(
+                    "--vyos-apikey or VYOS_APIKEY is required when --mode=vyos-api"
+                ));
+            }
+            if self.vyos_api.is_none() {
+                return Err(anyhow::anyhow!(
+                    "--vyos-api or VYOS_API is required when --mode=vyos-api"
+                ));
+            }
+        }
+
+        if !self.remote_group_path.starts_with('/') {
+            return Err(anyhow::anyhow!(
+                "--remote-group-path must start with '/', got '{}'",
+                self.remote_group_path
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Args)]
@@ -133,7 +175,7 @@ mod tests {
 
     use reqwest::Url;
 
-    use super::{Auth, CertAuth};
+    use super::{Auth, BouncerMode, CertAuth, Cli};
     use crate::crowdsec_lapi::types::CrowdsecAuth;
 
     struct TempCertFiles {
@@ -178,6 +220,32 @@ mod tests {
         }
     }
 
+    fn cli_for_mode(mode: BouncerMode) -> Cli {
+        Cli {
+            mode,
+            trusted_ips: None,
+            update_period_secs: 60,
+            full_sync_interval_secs: 900,
+            vyos_apikey: None,
+            vyos_api: None,
+            crowdsec_timeout: 10,
+            firewall_group: String::from("CROWDSEC_BOUNCER"),
+            vyos_save_config: false,
+            crowdsec_api: Url::parse("http://localhost:8080").unwrap(),
+            metrics_bind: "127.0.0.1:3000".parse().unwrap(),
+            remote_group_bind: "0.0.0.0:8080".parse().unwrap(),
+            remote_group_path: String::from("/crowdsec"),
+            auth: Auth {
+                crowdsec_apikey: Some(String::from("secret")),
+                cert_auth: CertAuth {
+                    crowdsec_root_ca_cert: PathBuf::from("/missing/ca.crt"),
+                    crowdsec_client_cert: PathBuf::from("/missing/tls.crt"),
+                    crowdsec_client_key: PathBuf::from("/missing/tls.key"),
+                },
+            },
+        }
+    }
+
     #[test]
     fn uses_apikey_auth_when_provided() {
         let certs = TempCertFiles::new();
@@ -206,5 +274,31 @@ mod tests {
             .expect_err("http should reject certificate auth");
 
         assert!(error.to_string().contains("https:// CROWDSEC_API"));
+    }
+
+    #[test]
+    fn remote_group_mode_does_not_require_vyos_credentials() {
+        let cli = cli_for_mode(BouncerMode::RemoteGroup);
+
+        cli.validate().expect("remote-group mode should validate");
+    }
+
+    #[test]
+    fn vyos_api_mode_requires_vyos_credentials() {
+        let cli = cli_for_mode(BouncerMode::VyosApi);
+
+        let error = cli.validate().expect_err("vyos-api mode needs credentials");
+
+        assert!(error.to_string().contains("--vyos-apikey"));
+    }
+
+    #[test]
+    fn remote_group_path_must_start_with_slash() {
+        let mut cli = cli_for_mode(BouncerMode::RemoteGroup);
+        cli.remote_group_path = String::from("crowdsec");
+
+        let error = cli.validate().expect_err("relative path should fail");
+
+        assert!(error.to_string().contains("--remote-group-path"));
     }
 }
