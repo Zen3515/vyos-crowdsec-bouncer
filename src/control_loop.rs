@@ -745,10 +745,56 @@ mod tests {
         config.assert();
     }
 
+    #[tokio::test]
+    async fn applies_cidr_decision_even_when_crowdsec_reports_ip_scope() {
+        let apikey = "test_key";
+        let mut test_app = mock_app(apikey).await;
+
+        let decisions = DecisionsResponse {
+            new: Some(vec![Decision {
+                value: String::from("213.209.159.0/24"),
+                scope: Scope::Ip,
+                ..Default::default()
+            }]),
+            deleted: None,
+        };
+        let lapi_stream = test_app
+            .lapi_mock
+            .mock("GET", "/v1/decisions/stream?startup=false")
+            .match_header("x-api-key", apikey)
+            .with_body(serde_json::to_vec(&decisions).expect("valid json"))
+            .with_status(200)
+            .create();
+
+        let config = test_app
+            .vyos_mock
+            .mock("POST", "/configure")
+            .match_body(Matcher::Regex(r#"213\.209\.159\.0/24"#.into()))
+            .with_body(r#"{"success": true, "data": [], "error": null}"#)
+            .with_status(200)
+            .expect(1)
+            .create();
+        let save = mock_save_command(&mut test_app.vyos_mock);
+        let decision_options = DecisionsOptions {
+            startup: false,
+            ..Default::default()
+        };
+
+        let result = reconcile_decisions(&test_app.app, &decision_options).await;
+
+        assert!(result.is_ok());
+        lapi_stream.assert();
+        config.assert();
+        save.assert();
+        assert_eq!(
+            test_app.app.blacklist.load().v4,
+            IpRange::from_iter(["213.209.159.0/24"].into_iter().map(|x| x.parse().unwrap()))
+        );
+    }
+
     #[test]
     fn incremental_update_keeps_overlapping_range_decision_intact() {
-        let retained =
-            IpRangeMixed::from(ipnets(&["213.209.159.11/32", "213.209.159.228/32"]));
+        let retained = IpRangeMixed::from(ipnets(&["213.209.159.11/32", "213.209.159.228/32"]));
         let candidate_adds = IpRangeMixed::from(ipnets(&["213.209.159.0/24"]));
 
         let update = build_capped_update(&retained, candidate_adds, IpRangeMixed::default());

@@ -94,10 +94,12 @@ impl TryFrom<&Decision> for ipnet::IpNet {
             }
         }
         match decision.scope {
-            Scope::Ip => Ok(match decision.value.parse::<IpAddr>()? {
-                IpAddr::V4(v4) => IpNet::V4(Ipv4Net::new(v4, 32)?),
-                IpAddr::V6(v6) => IpNet::V6(Ipv6Net::new(v6, 128)?),
-            }),
+            Scope::Ip => match decision.value.parse::<IpAddr>() {
+                Ok(IpAddr::V4(v4)) => Ok(IpNet::V4(Ipv4Net::new(v4, 32)?)),
+                Ok(IpAddr::V6(v6)) => Ok(IpNet::V6(Ipv6Net::new(v6, 128)?)),
+                Err(_) if decision.value.contains('/') => Ok(decision.value.parse::<IpNet>()?),
+                Err(err) => Err(err.into()),
+            },
             Scope::Range => Ok(decision.value.parse::<IpNet>()?),
             Scope::Other(ref scope) => Err(anyhow!("Unhandled scope '{}'", scope)),
         }
@@ -297,6 +299,19 @@ mod test {
         let decision: Decision = serde_json::from_str(serialized).expect("failed to deserialize");
 
         assert!(matches!(decision.scope, Scope::Ip));
+    }
+
+    #[test]
+    fn parses_ip_scope_cidr_as_network() {
+        let decision = Decision {
+            scope: Scope::Ip,
+            value: String::from("213.209.159.0/24"),
+            ..Default::default()
+        };
+
+        let parsed = IpNet::try_from(&decision).expect("cidr should parse");
+
+        assert_eq!(parsed, "213.209.159.0/24".parse::<IpNet>().unwrap());
     }
 
     #[test]
