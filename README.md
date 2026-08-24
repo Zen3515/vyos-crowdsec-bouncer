@@ -69,9 +69,7 @@ failed or ambiguous VyOS write/save attempt, and periodically every `FULL_SYNC_I
 (default: 900 seconds, set to `0` to disable periodic full sync). Full sync reads the existing VyOS
 group, fetches active CrowdSec decisions with `startup=true`, then applies the computed add/delete diff.
 
-`remote-group` mode is not capped by the bouncer because it does not write individual entries into the VyOS configuration. It refreshes the full active CrowdSec decision list every `UPDATE_FREQUENCY_SECS` and keeps serving the last successful list if CrowdSec is temporarily unavailable. Before the first successful sync, the feed returns HTTP 503 so VyOS can keep its cached list instead of replacing it with an empty response.
-
-Once this problem is fixed we can enable the crowdsourced blocklist coming from the central api (CAPI) and allow for customizing the origins.
+`remote-group` mode is not capped by the bouncer because it does not write individual entries into the VyOS configuration. It refreshes the full active CrowdSec decision list every `UPDATE_FREQUENCY_SECS`, including CrowdSec's CAPI/community decisions, and keeps serving the last successful list if CrowdSec is temporarily unavailable. Before the first successful sync, the feed returns HTTP 503 so VyOS can keep its cached list instead of replacing it with an empty response.
 
 ### CLI
 ```

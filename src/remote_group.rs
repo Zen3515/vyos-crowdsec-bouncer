@@ -13,9 +13,14 @@ use axum_server::Server;
 use tracing::{error, info, instrument};
 
 use crate::blacklist::{BlacklistCache, IpRangeMixed};
-use crate::crowdsec_lapi::types::DecisionsIpRange;
-use crate::crowdsec_lapi::DEFAULT_DECISION_ORIGINS;
+use crate::crowdsec_lapi::types::{DecisionsIpRange, Origin};
 use crate::crowdsec_lapi::{CrowdsecLAPI, CrowdsecLapiClient, DecisionsOptions};
+
+// Unlike a static VyOS network group, a remote group is not subject to the
+// 15k-entry bouncer write cap. Include CrowdSec's community decisions (CAPI)
+// as well as locally generated and list decisions.
+const REMOTE_GROUP_DECISION_ORIGINS: [Origin; 4] =
+    [Origin::Crowdsec, Origin::Lists, Origin::Cscli, Origin::Capi];
 
 #[derive(Debug)]
 pub struct RemoteGroupState {
@@ -124,7 +129,7 @@ async fn remote_group_feed(State(state): State<Arc<RemoteGroupState>>) -> Respon
 
 #[instrument(skip(app))]
 pub async fn sync_once(app: &RemoteGroupApp) -> Result<(), anyhow::Error> {
-    let decision_options = DecisionsOptions::new(&DEFAULT_DECISION_ORIGINS, true);
+    let decision_options = DecisionsOptions::new(&REMOTE_GROUP_DECISION_ORIGINS, true);
     let desired_decisions = app.lapi.stream_decisions(&decision_options).await?;
     let desired_blacklist = DecisionsIpRange::from(desired_decisions)
         .new
@@ -224,7 +229,7 @@ mod tests {
                 Matcher::UrlEncoded(String::from("type"), String::from("ban")),
                 Matcher::UrlEncoded(
                     String::from("origins"),
-                    String::from("crowdsec,lists,cscli"),
+                    String::from("crowdsec,lists,cscli,CAPI"),
                 ),
                 Matcher::UrlEncoded(String::from("scopes"), String::from("ip,range")),
                 Matcher::UrlEncoded(String::from("dedup"), String::from("false")),
