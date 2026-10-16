@@ -1,5 +1,6 @@
 pub mod blacklist;
 pub mod cli;
+pub mod cloudflare;
 pub mod control_loop;
 pub mod crowdsec_lapi;
 pub mod metrics;
@@ -26,6 +27,7 @@ pub struct App {
     vyos: VyosClient,
     blacklist: BlacklistCache,
     pending_save: AtomicBool,
+    cloudflare_updates: Option<cloudflare::DecisionPublisher>,
     config: Config,
 }
 
@@ -44,7 +46,16 @@ impl App {
             vyos: vyos_api,
             blacklist: BlacklistCache::default(),
             pending_save: AtomicBool::new(false),
+            cloudflare_updates: None,
             config,
         }
+    }
+
+    pub fn with_cloudflare_updates(
+        mut self,
+        updates: Option<cloudflare::DecisionPublisher>,
+    ) -> Self {
+        self.cloudflare_updates = updates;
+        self
     }
 }

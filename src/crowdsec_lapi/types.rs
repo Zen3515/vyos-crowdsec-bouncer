@@ -137,7 +137,16 @@ impl From<DecisionsResponse> for DecisionsIpRange {
     fn from(value: DecisionsResponse) -> Self {
         Self {
             new: IpRangeMixed::from(parse_crowdsec_decisions(value.new)),
-            deleted: IpRangeMixed::from(parse_crowdsec_decisions(value.deleted)),
+            // Expired decisions must still be removed from downstream firewalls.
+            deleted: IpRangeMixed::from(parse_crowdsec_decisions(value.deleted.map(|decisions| {
+                decisions
+                    .into_iter()
+                    .map(|mut decision| {
+                        decision.until = None;
+                        decision
+                    })
+                    .collect()
+            }))),
         }
     }
 }
@@ -312,6 +321,20 @@ mod test {
         let parsed = IpNet::try_from(&decision).expect("cidr should parse");
 
         assert_eq!(parsed, "213.209.159.0/24".parse::<IpNet>().unwrap());
+    }
+
+    #[test]
+    fn expired_deletions_are_removed_while_expired_additions_are_skipped() {
+        let expired = Decision {
+            until: Some(chrono::Utc::now() - chrono::Duration::hours(1)),
+            ..mock_decision("192.0.2.1")
+        };
+        let parsed = DecisionsIpRange::from(super::DecisionsResponse {
+            new: Some(vec![expired.clone()]),
+            deleted: Some(vec![expired]),
+        });
+        assert!(parsed.new.is_empty());
+        assert_eq!(parsed.deleted.net_count(), 1);
     }
 
     #[test]

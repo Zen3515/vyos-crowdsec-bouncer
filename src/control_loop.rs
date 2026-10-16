@@ -232,9 +232,11 @@ async fn reconcile_incremental(
     let new_decisions = app.lapi.stream_decisions(decision_options).await?;
 
     let blacklist = app.blacklist.load();
-    let decision_ips = DecisionsIpRange::from(new_decisions)
-        .filter_new(&app.config.trusted_ips)
-        .filter_deleted(blacklist.as_ref());
+    let decision_ips = DecisionsIpRange::from(new_decisions).filter_new(&app.config.trusted_ips);
+    if let Some(updates) = &app.cloudflare_updates {
+        updates.publish_incremental(&decision_ips);
+    }
+    let decision_ips = decision_ips.filter_deleted(blacklist.as_ref());
     let retained_blacklist = blacklist.as_ref().exclude(&decision_ips.deleted);
 
     let update = build_capped_update(&retained_blacklist, decision_ips.new, decision_ips.deleted);
@@ -247,12 +249,16 @@ async fn reconcile_full_sync(
 ) -> Result<(), anyhow::Error> {
     info!("Reconciling full firewall group state");
 
-    let actual_nets = retrieve_existing_networks(app).await?;
     let desired_decisions = app.lapi.stream_decisions(decision_options).await?;
     let desired_blacklist = DecisionsIpRange::from(desired_decisions)
         .new
         .exclude(&app.config.trusted_ips);
 
+    if let Some(updates) = &app.cloudflare_updates {
+        updates.publish_full(desired_blacklist.clone());
+    }
+
+    let actual_nets = retrieve_existing_networks(app).await?;
     let update = build_exact_full_sync_update(actual_nets, desired_blacklist);
 
     apply_update(app, update, ReconcileMode::FullSync).await
@@ -542,6 +548,7 @@ mod tests {
             },
             blacklist: crate::BlacklistCache::default(),
             pending_save: std::sync::atomic::AtomicBool::new(false),
+            cloudflare_updates: None,
         };
 
         TestApp {
@@ -870,7 +877,11 @@ mod tests {
                     .unwrap()
             })
             .collect::<Vec<_>>();
-        test_app.app.blacklist.store(IpRangeMixed::from(existing));
+        let existing = IpRangeMixed::from(existing);
+        test_app.app.blacklist.store(existing.clone());
+        let (publisher, snapshots) = crate::cloudflare::DecisionPublisher::channel();
+        publisher.publish_full(existing);
+        test_app.app.cloudflare_updates = Some(publisher);
 
         let decisions = mock_decisions(["203.0.113.1", "203.0.113.2"], []);
         let lapi_stream = test_app
@@ -904,6 +915,11 @@ mod tests {
             .into_nets()
             .iter()
             .any(|net| net.to_string() == "203.0.113.1/32" || net.to_string() == "203.0.113.2/32"));
+        // Cloudflare receives the full source state, independently of the VyOS write cap.
+        assert_eq!(
+            snapshots.borrow().as_ref().unwrap().net_count(),
+            FIREWALL_GROUP_MAX_ITEMS + 2
+        );
     }
 
     #[tokio::test]
@@ -1015,6 +1031,9 @@ mod tests {
     async fn configure_success_false_returns_error_and_keeps_cache() {
         let apikey = "test_key";
         let mut test_app = mock_app(apikey).await;
+        let (publisher, snapshots) = crate::cloudflare::DecisionPublisher::channel();
+        publisher.publish_full(IpRangeMixed::default());
+        test_app.app.cloudflare_updates = Some(publisher);
 
         let decisions = mock_decisions(["127.0.0.1"], []);
         let lapi_stream = test_app
@@ -1045,10 +1064,40 @@ mod tests {
         config.assert();
         save.assert();
         assert!(test_app.app.blacklist.load().is_empty());
+        assert_eq!(snapshots.borrow().as_ref().unwrap().net_count(), 1);
         assert!(test_app
             .app
             .pending_save
             .load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn publishes_cloudflare_snapshot_even_when_vyos_cannot_be_read() {
+        let mut test_app = mock_app("test_key").await;
+        let (publisher, snapshots) = crate::cloudflare::DecisionPublisher::channel();
+        test_app.app.cloudflare_updates = Some(publisher);
+        let lapi = mock_default_decision_stream(
+            &mut test_app.lapi_mock,
+            "test_key",
+            true,
+            mock_decisions(["192.0.2.1"], []),
+        );
+        let vyos = test_app
+            .vyos_mock
+            .mock("POST", "/retrieve")
+            .with_status(503)
+            .with_body("temporarily unavailable")
+            .expect(1)
+            .create();
+        assert!(reconcile_decisions(
+            &test_app.app,
+            &DecisionsOptions::new(&crate::crowdsec_lapi::DEFAULT_DECISION_ORIGINS, true)
+        )
+        .await
+        .is_err());
+        lapi.assert();
+        vyos.assert();
+        assert_eq!(snapshots.borrow().as_ref().unwrap().net_count(), 1);
     }
 
     #[tokio::test]

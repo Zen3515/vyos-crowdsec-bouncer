@@ -52,6 +52,9 @@ pub struct Cli {
     pub remote_group_path: String,
 
     #[command(flatten)]
+    pub cloudflare: crate::cloudflare::CloudflareArgs,
+
+    #[command(flatten)]
     pub auth: Auth,
 }
 
@@ -64,6 +67,7 @@ pub enum BouncerMode {
 
 impl Cli {
     pub fn validate(&self) -> Result<(), anyhow::Error> {
+        self.cloudflare.config()?;
         if matches!(self.mode, BouncerMode::VyosApi) {
             if self.vyos_apikey.is_none() {
                 return Err(anyhow::anyhow!(
@@ -235,6 +239,7 @@ mod tests {
             metrics_bind: "127.0.0.1:3000".parse().unwrap(),
             remote_group_bind: "0.0.0.0:8080".parse().unwrap(),
             remote_group_path: String::from("/crowdsec"),
+            cloudflare: crate::cloudflare::CloudflareArgs::default(),
             auth: Auth {
                 crowdsec_apikey: Some(String::from("secret")),
                 cert_auth: CertAuth {

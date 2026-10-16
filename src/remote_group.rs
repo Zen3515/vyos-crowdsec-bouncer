@@ -53,6 +53,7 @@ pub struct RemoteGroupApp {
     trusted_ips: IpRangeMixed,
     update_period: Duration,
     state: Arc<RemoteGroupState>,
+    cloudflare_updates: Option<crate::cloudflare::DecisionPublisher>,
 }
 
 impl RemoteGroupApp {
@@ -67,7 +68,16 @@ impl RemoteGroupApp {
             trusted_ips,
             update_period,
             state,
+            cloudflare_updates: None,
         }
+    }
+
+    pub fn with_cloudflare_updates(
+        mut self,
+        updates: Option<crate::cloudflare::DecisionPublisher>,
+    ) -> Self {
+        self.cloudflare_updates = updates;
+        self
     }
 }
 
@@ -135,6 +145,10 @@ pub async fn sync_once(app: &RemoteGroupApp) -> Result<(), anyhow::Error> {
         .new
         .exclude(&app.trusted_ips);
     let entry_count = desired_blacklist.net_count();
+
+    if let Some(updates) = &app.cloudflare_updates {
+        updates.publish_full(desired_blacklist.clone());
+    }
 
     app.state.store_blacklist(desired_blacklist);
     info!(
@@ -240,17 +254,23 @@ mod tests {
             .expect(1)
             .create();
         let state = Arc::new(RemoteGroupState::default());
+        let (publisher, snapshots) = crate::cloudflare::DecisionPublisher::channel();
         let app = RemoteGroupApp::new(
             lapi_client(apikey.to_string(), &mock),
             IpRangeMixed::from(vec!["203.0.113.1/32".parse().unwrap()]),
             std::time::Duration::from_secs(1),
             Arc::clone(&state),
-        );
+        )
+        .with_cloudflare_updates(Some(publisher));
 
         sync_once(&app).await.unwrap();
 
         lapi_stream.assert();
         assert!(state.is_ready());
+        assert_eq!(
+            **snapshots.borrow().as_ref().unwrap(),
+            *state.blacklist.load()
+        );
         assert_eq!(
             state.blacklist.load().v4,
             IpRange::from_iter(

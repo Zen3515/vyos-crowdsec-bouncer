@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
 use vyos_crowdsec_bouncer::cli::{BouncerMode, Cli};
+use vyos_crowdsec_bouncer::cloudflare::{CloudflareSync, DecisionPublisher};
 use vyos_crowdsec_bouncer::control_loop::reconcile;
 use vyos_crowdsec_bouncer::crowdsec_lapi::CrowdsecLapiClient;
 use vyos_crowdsec_bouncer::prometheus::Prometheus;
@@ -20,6 +21,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let args = Cli::parse();
     args.validate()?;
+    let cloudflare = args.cloudflare.config()?;
     let crowdsec_auth = args
         .auth
         .clone()
@@ -35,6 +37,15 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let mut task_set = tokio::task::JoinSet::new();
     task_set.spawn(async { Ok(metrics.await?) });
+
+    let cloudflare_updates = if let Some(config) = cloudflare {
+        let sync = CloudflareSync::new(config).await?;
+        let (publisher, snapshots) = DecisionPublisher::channel();
+        task_set.spawn(async { sync.run(snapshots).await });
+        Some(publisher)
+    } else {
+        None
+    };
 
     match args.mode {
         BouncerMode::VyosApi => {
@@ -57,7 +68,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 },
                 vyos_save_config: args.vyos_save_config,
             };
-            let app = App::new(lapi, vyos_api, config);
+            let app = App::new(lapi, vyos_api, config).with_cloudflare_updates(cloudflare_updates);
             task_set.spawn(async { reconcile(app).await });
         }
         BouncerMode::RemoteGroup => {
@@ -67,7 +78,8 @@ async fn main() -> Result<(), anyhow::Error> {
                 args.trusted_ips.map(From::from).unwrap_or_default(),
                 Duration::from_secs(args.update_period_secs),
                 Arc::clone(&state),
-            );
+            )
+            .with_cloudflare_updates(cloudflare_updates);
             let server =
                 RemoteGroupServer::new(args.remote_group_bind, args.remote_group_path, state);
 
